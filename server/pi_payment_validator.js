@@ -436,7 +436,7 @@ router.post('/store-purchase', async (req, res) => {
         // Debit wallet (throws if insufficient funds). fn_wallet_debit returns
         // the new BIGINT balance, which is not needed here.
         await client.query(
-            `SELECT fn_wallet_debit($1, $2, 'store_purchase'::transaction_type, $3, $4) AS new_balance`,
+            `SELECT fn_wallet_debit($1, $2, 'store_purchase'::transaction_type, $3, $4)`,
             [
                 playerId,
                 item.price_tokens,
