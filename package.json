@@ -1,0 +1,19 @@
+{
+  "name": "operation-archipelago-backend",
+  "version": "1.0.0",
+  "description": "Operation: Archipelago — Pi Network payment & game backend services",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "axios": "^1.18.1",
+    "express": "^5.2.1",
+    "ioredis": "^5.11.1",
+    "jsonwebtoken": "^9.0.3",
+    "pg": "^8.22.0",
+    "pino": "^10.3.1",
+    "uuid": "^14.0.1"
+  }
+}
