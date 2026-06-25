@@ -16,6 +16,8 @@ const nkruntime = require('@heroiclabs/nakama-runtime');
 const BattleRoyaleMatch: nkruntime.MatchHandler = {
 
     matchInit(ctx, logger, nk, params) {
+        // Nakama's JS runtime is not Node.js — process.env is unavailable.
+        // Capture required env values from ctx.env into match state for later use.
         const state = {
             players:     {} as Record<string, PlayerMatchState>,
             phase:       0,                      // storm ring phase 0-6
@@ -23,8 +25,11 @@ const BattleRoyaleMatch: nkruntime.MatchHandler = {
             mapCenter:   { x: 0, z: 0 },        // NASA island center
             ringRadius:  [1800, 1400, 1000, 700, 450, 250, 100],
             maxPlayers:  100,
+            minPlayers:  2,                      // players required before match starts
             activeBounties: [] as string[],      // bounty IDs active this match
             started:     false,
+            gameApiUrl:    ctx.env['GAME_API_URL'] || '',
+            internalSecret: ctx.env['INTERNAL_SECRET'] || '',
         };
 
         return {
@@ -72,6 +77,14 @@ const BattleRoyaleMatch: nkruntime.MatchHandler = {
 
     matchLoop(ctx, logger, nk, dispatcher, tick, state, messages) {
         const ms = state as any;
+
+        // ---- Start the match once enough players have joined ----
+        // Setting ms.started enables the win condition below and makes
+        // matchJoinAttempt reject late joiners.
+        if (!ms.started && Object.keys(ms.players).length >= ms.minPlayers) {
+            ms.started = true;
+            logger.info('Match started with ' + Object.keys(ms.players).length + ' players');
+        }
 
         // ---- Process incoming messages ----
         for (const msg of messages) {
@@ -199,14 +212,24 @@ async function _processTagCollection(
 ) {
     // Prevent double-collection via in-memory lock
     if (state[`tag_lock_${tagId}`]) return;
+
+    // Env values are captured into match state during matchInit because
+    // process.env is unavailable in the Nakama runtime. Fail fast if missing.
+    const gameApiUrl = state.gameApiUrl;
+    const internalSecret = state.internalSecret;
+    if (!gameApiUrl || !internalSecret) {
+        logger.error('Dog tag collection aborted: GAME_API_URL / INTERNAL_SECRET not configured in match state');
+        return;
+    }
+
     state[`tag_lock_${tagId}`] = true;
 
     try {
         // RPC call to Game API Server to process token transfer
         const resp = await nk.httpRequest(
-            `${process.env.GAME_API_URL}/internal/dog-tags/collect`,
+            `${gameApiUrl}/internal/dog-tags/collect`,
             'POST',
-            { 'X-Internal-Secret': process.env.INTERNAL_SECRET },
+            { 'X-Internal-Secret': internalSecret },
             JSON.stringify({ tagId, collectorId })
         );
 
@@ -238,9 +261,17 @@ const matchmakerMatched: nkruntime.MatchmakerMatchedFunction = async (
     // Check if any players have active bounties targeting another player in this pool
     const userIds = matches.map(m => m.presence.userId);
 
-    const activeBounties: any[] = await nk.storageRead(
-        userIds.map(uid => ({ collection: 'bounties', key: 'active_targets', userId: uid }))
-    ).catch(() => []);
+    // nk.storageRead is synchronous in the Nakama runtime and throws on error;
+    // its return value is a plain array with no .catch(), so guard with try/catch.
+    let activeBounties: any[] = [];
+    try {
+        activeBounties = nk.storageRead(
+            userIds.map(uid => ({ collection: 'bounties', key: 'active_targets', userId: uid }))
+        );
+    } catch (e) {
+        logger.warn('Failed to read active bounties for matchmaker pool: ' + e);
+        activeBounties = [];
+    }
 
     for (const record of activeBounties) {
         if (!record?.value?.targets) continue;

@@ -146,8 +146,10 @@ export class CharacterController extends pc.ScriptType {
         this._checkGrounded();
         this._processFSM(dt);
         this._applyMovement(dt);
-        this._updateCamera(dt);
+        // Weapon sway consumes look deltas, so it must run before _updateCamera,
+        // which clears input.lookDeltaX/Y after applying them.
         this._updateWeaponSway(dt);
+        this._updateCamera(dt);
         this._updateFOV(dt);
     }
 

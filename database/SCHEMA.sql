@@ -139,6 +139,26 @@ CREATE INDEX idx_wallet_tx_player    ON wallet_transactions(player_id, created_a
 CREATE INDEX idx_wallet_tx_reference ON wallet_transactions(reference_id);
 
 -- ---------------------------------------------------------------------------
+-- TABLE: token_packages
+-- Purchasable Pi → game-token bundles — server-priced to prevent manipulation
+-- (queried by POST /payments/initiate)
+-- ---------------------------------------------------------------------------
+CREATE TABLE token_packages (
+    id              UUID         PRIMARY KEY DEFAULT uuid_generate_v4(),
+    sku             VARCHAR(64)  UNIQUE NOT NULL,
+    display_name    VARCHAR(128) NOT NULL,
+    price_pi        NUMERIC(18,7) NOT NULL,   -- Pi cost (exact decimal)
+    tokens_granted  BIGINT       NOT NULL,    -- game tokens awarded on confirm
+    is_active       BOOLEAN      NOT NULL DEFAULT TRUE,
+    created_at      TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+
+    CONSTRAINT chk_package_price_positive  CHECK (price_pi > 0),
+    CONSTRAINT chk_package_tokens_positive CHECK (tokens_granted > 0)
+);
+
+CREATE INDEX idx_token_packages_active ON token_packages(is_active) WHERE is_active = TRUE;
+
+-- ---------------------------------------------------------------------------
 -- TABLE: pi_payments
 -- Records every Pi Network blockchain payment — txid is the external anchor
 -- ---------------------------------------------------------------------------
@@ -222,7 +242,7 @@ CREATE INDEX idx_inventory_equipped  ON player_inventories(player_id, is_equippe
 -- ---------------------------------------------------------------------------
 CREATE TABLE dog_tags (
     id              UUID        PRIMARY KEY DEFAULT uuid_generate_v4(),
-    match_id        UUID        NOT NULL,   -- FK to matches.id
+    match_id        UUID        NOT NULL,   -- references matches.id (FK added after matches table; see below)
     victim_id       UUID        NOT NULL REFERENCES players(id),
     killer_id       UUID        REFERENCES players(id),   -- NULL if environmental
     token_value     BIGINT      NOT NULL DEFAULT 0,
@@ -319,6 +339,12 @@ CREATE TABLE matches (
 
 CREATE INDEX idx_matches_status  ON matches(status);
 CREATE INDEX idx_matches_mode    ON matches(mode, started_at DESC);
+
+-- Deferred FK: dog_tags.match_id references matches.id (matches is created here,
+-- after dog_tags, so the constraint is added now rather than inline).
+ALTER TABLE dog_tags
+    ADD CONSTRAINT fk_dog_tags_match
+    FOREIGN KEY (match_id) REFERENCES matches(id);
 
 -- ---------------------------------------------------------------------------
 -- TABLE: match_players

@@ -170,6 +170,8 @@ router.post('/confirm', async (req, res) => {
     );
 
     if (paymentRow.rowCount === 0) {
+        // Release the idempotency lock so a corrected retry isn't blocked for 24h.
+        await redis.del(`idempotency:payment:${piPaymentId}`);
         return res.status(404).json({ error: 'Internal payment record not found' });
     }
 
@@ -186,6 +188,8 @@ router.post('/confirm', async (req, res) => {
         piPayment = await piApi('GET', `/payments/${piPaymentId}`);
     } catch (err) {
         logger.error({ err, piPaymentId }, 'Failed to reach Pi Platform API');
+        // Likely transient — release the idempotency lock so the payment can be retried.
+        await redis.del(`idempotency:payment:${piPaymentId}`);
         return res.status(502).json({ error: 'Could not verify payment with Pi Network' });
     }
 
@@ -196,7 +200,12 @@ router.post('/confirm', async (req, res) => {
         validationErrors.push('uid mismatch — payment not owned by this player');
     }
 
-    if (String(piPayment.amount) !== String(internalRecord.amount_pi)) {
+    // Compare amounts numerically at the schema precision (NUMERIC(18,7) = 7 dp)
+    // to avoid false rejections from differing string formats (e.g. "1" vs "1.0000000").
+    const PI_AMOUNT_SCALE = 10_000_000; // 7 decimal places
+    const piAmountScaled = Math.round(Number(piPayment.amount) * PI_AMOUNT_SCALE);
+    const dbAmountScaled = Math.round(Number(internalRecord.amount_pi) * PI_AMOUNT_SCALE);
+    if (!Number.isFinite(piAmountScaled) || piAmountScaled !== dbAmountScaled) {
         validationErrors.push(
             `amount mismatch — Pi says ${piPayment.amount}, DB expects ${internalRecord.amount_pi}`
         );
@@ -323,7 +332,7 @@ router.post('/cancel', async (req, res) => {
     await db.query(
         `UPDATE pi_payments
          SET status      = 'failed',
-             raw_payload = raw_payload || '{"cancelledByUser": true}'::jsonb
+             raw_payload = COALESCE(raw_payload, '{}'::jsonb) || '{"cancelledByUser": true}'::jsonb
          WHERE id = $1 AND player_id = $2 AND status = 'pending'`,
         [internalPaymentId, playerId]
     );
