@@ -1,7 +1,9 @@
 -- =============================================================================
 --  Operation: Archipelago — Master Database Schema
 --  Engine: PostgreSQL 15+
---  All monetary values stored as integer micro-units (1 Pi = 1,000,000 units)
+--  In-game token balances stored as integer micro-units (1 token = 1,000,000 units).
+--  Pi amounts stored as exact decimals NUMERIC(18,7) (e.g. token_packages.price_pi,
+--  pi_payments.amount_pi).
 -- =============================================================================
 
 -- ---------------------------------------------------------------------------

@@ -67,6 +67,24 @@ function calcTokens(piAmount) {
 }
 
 // ---------------------------------------------------------------------------
+// HELPER: Scale a decimal Pi amount to an integer count of 1e-7 units (BigInt)
+// Uses string parsing (not float math) so the comparison is exact at the
+// schema precision NUMERIC(18,7) and never overflows JS's safe-integer range.
+// Returns null for malformed input or more precision than 7 decimal places.
+// ---------------------------------------------------------------------------
+function scalePiAmount(value) {
+    const str = String(value).trim();
+    if (!/^-?\d+(\.\d+)?$/.test(str)) return null;
+    const negative = str.startsWith('-');
+    const unsigned = negative ? str.slice(1) : str;
+    const [intPart, fracPart = ''] = unsigned.split('.');
+    if (fracPart.length > 7) return null; // exceeds schema precision
+    const scaledFrac = (fracPart + '0000000').slice(0, 7);
+    const scaled = BigInt(intPart + scaledFrac);
+    return negative ? -scaled : scaled;
+}
+
+// ---------------------------------------------------------------------------
 // HELPER: Idempotency guard using Redis SETNX
 // Returns true if this is a NEW request; false if a duplicate
 // ---------------------------------------------------------------------------
@@ -179,6 +197,9 @@ router.post('/confirm', async (req, res) => {
 
     if (internalRecord.status !== 'pending') {
         logger.warn({ internalPaymentId, status: internalRecord.status }, 'Confirm on non-pending payment');
+        // Release the idempotency lock so subsequent confirms surface the real
+        // terminal status instead of the generic "already being processed" conflict.
+        await redis.del(`idempotency:payment:${piPaymentId}`);
         return res.status(409).json({ error: `Payment is already ${internalRecord.status}` });
     }
 
@@ -200,12 +221,12 @@ router.post('/confirm', async (req, res) => {
         validationErrors.push('uid mismatch — payment not owned by this player');
     }
 
-    // Compare amounts numerically at the schema precision (NUMERIC(18,7) = 7 dp)
-    // to avoid false rejections from differing string formats (e.g. "1" vs "1.0000000").
-    const PI_AMOUNT_SCALE = 10_000_000; // 7 decimal places
-    const piAmountScaled = Math.round(Number(piPayment.amount) * PI_AMOUNT_SCALE);
-    const dbAmountScaled = Math.round(Number(internalRecord.amount_pi) * PI_AMOUNT_SCALE);
-    if (!Number.isFinite(piAmountScaled) || piAmountScaled !== dbAmountScaled) {
+    // Compare amounts as exact integers scaled to the schema precision
+    // (NUMERIC(18,7) = 7 dp) using BigInt string parsing, avoiding float
+    // rounding and safe-integer overflow that could cause false mismatches.
+    const piAmountScaled = scalePiAmount(piPayment.amount);
+    const dbAmountScaled = scalePiAmount(internalRecord.amount_pi);
+    if (piAmountScaled === null || dbAmountScaled === null || piAmountScaled !== dbAmountScaled) {
         validationErrors.push(
             `amount mismatch — Pi says ${piPayment.amount}, DB expects ${internalRecord.amount_pi}`
         );
@@ -409,13 +430,13 @@ router.post('/store-purchase', async (req, res) => {
     }
 
     const client = await db.connect();
-    let txId;
     try {
         await client.query('BEGIN');
 
-        // Debit wallet (throws if insufficient funds)
-        const debitResult = await client.query(
-            `SELECT fn_wallet_debit($1, $2, 'store_purchase'::transaction_type, $3, $4) AS tx_id`,
+        // Debit wallet (throws if insufficient funds). fn_wallet_debit returns
+        // the new BIGINT balance, which is not needed here.
+        await client.query(
+            `SELECT fn_wallet_debit($1, $2, 'store_purchase'::transaction_type, $3, $4) AS new_balance`,
             [
                 playerId,
                 item.price_tokens,
@@ -423,7 +444,6 @@ router.post('/store-purchase', async (req, res) => {
                 `Store purchase: ${item.display_name} (${item.rarity})`,
             ]
         );
-        txId = debitResult.rows[0].tx_id;
 
         // Grant item to inventory
         await client.query(

@@ -69,7 +69,14 @@ const BattleRoyaleMatch: nkruntime.MatchHandler = {
         const ms = state as any;
         for (const p of presences) {
             if (ms.players[p.userId]) {
-                ms.players[p.userId].alive = false;
+                if (ms.started) {
+                    // Match in progress: mark eliminated so the win condition counts them out.
+                    ms.players[p.userId].alive = false;
+                } else {
+                    // Pre-start: remove entirely so start and capacity checks reflect
+                    // the players currently present, not those who joined and left.
+                    delete ms.players[p.userId];
+                }
             }
         }
         return { state };

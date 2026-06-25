@@ -211,4 +211,4 @@ global:
 | WebSocket injection | Input sanitization + protobuf message schemas |
 | DDoS | AWS Shield Standard + rate limiting at API Gateway |
 | Unauthorized item grants | Admin-only item-grant endpoint behind IAM role |
-| JWT forgery | RS256 key pair; public key pinned server-side |
+| JWT forgery | HS256 signature with shared secret (JWT_SECRET); accepted algorithm pinned server-side |
